@@ -1,8 +1,8 @@
 import torch
 
-class CAieaNets(torch.nn.Module):
+class CStateNets(torch.nn.Module):
     def __init__(self):
-        super(CActiveSceneExplorer, self).__init__()
+        super(CStateNets, self).__init__()
         self.relu = torch.nn.LeakyReLU(negative_slope=0.2)
         self.max_pool = torch.nn.MaxPool2d(kernel_size=2, stride=2)
         self.avg_pool = torch.nn.AvgPool2d(kernel_size=7)
