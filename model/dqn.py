@@ -79,13 +79,13 @@ class CModel():
 
         self.__oOptimizer = torch.optim.RMSprop(self.__oPolicyNet.parameters())
         self.__oMemory = ReplayMemory(10000)
-
+        self.__fImgGamma = 1
         self.__strCkptPath = checkpoint_path
         self.__bVideo = video
 
         if(video):
             fourcc = cv2.VideoWriter_fourcc(*'MPEG')
-            self.__oVideo = cv2.VideoWriter("./TrainVideo.mp4", fourcc, 25.0, (uWidth, uHeight))
+            self.__oVideo = cv2.VideoWriter("./Video.mp4", fourcc, 25.0, (uWidth, uHeight))
 
     def Test(self):
         bDone = False
@@ -93,10 +93,11 @@ class CModel():
 
         vKptOriginal, _ = self.__oKptModel.detectAndCompute(np.squeeze(np.asarray(self.__oState.cpu()), axis=0), None)
         self.__vKptThreshold = [len(vKptOriginal) * 0.8, len(vKptOriginal) * 1.1]
-
+        self.__fImgGamma = 1
         while not bDone:
             vAction = self.__SelectAction(self.__oState)
-            oNextState, fReward, bDone, _ = self.__TakeAction(vAction, np.asarray(self.__oState.cpu()), "Test")
+            oNextState, fReward, _, _ = self.__TakeAction(vAction, np.asarray(self.__oState.cpu()), "Test")
+            self.__oState = oNextState
             
             if self.__uSteps % 100 == 0:
                 DebugPrint().info("Reward: " + str(fReward))
@@ -107,12 +108,13 @@ class CModel():
         TARGET_UPDATE = 10
         oSrcState = self.__oState
         vKptOriginal, _ = self.__oKptModel.detectAndCompute(np.squeeze(np.asarray(oSrcState.cpu()), axis=0), None)
-        self.__vKptThreshold = [len(vKptOriginal) * 0.8, len(vKptOriginal) * 1.2]
+        self.__vKptThreshold = [len(vKptOriginal) * 0.8, len(vKptOriginal) * 2]
         DebugPrint().info("Original Kpt Number: " + str(len(vKptOriginal)) + ", " + str(self.__vKptThreshold))
         for iEpisode in range(self.__uNumEpisodes):
             bDone = False
             self.__uSteps = 0
             self.__oState = oSrcState
+            self.__fImgGamma = 1
             if(iEpisode > 0):
                 self.__oTargetNet.load_state_dict(torch.load(self.__strCkptPath + "/dqn_checkpoint.pth"))
                 
@@ -125,7 +127,7 @@ class CModel():
                 self.__oMemory.push(self.__oState, vAction, oNextStateMem, oReward)
                 self.__oState = oNextState
                 self.__OptimizeModel()
-
+            
             if iEpisode % TARGET_UPDATE == 0:
                 DebugPrint().info("Episode: " + str(iEpisode) + ", Reward: " + str(fReward) + ", Kpt Dst: " + str(sKptDst))
                 self.__oTargetNet.load_state_dict(self.__oPolicyNet.state_dict())
@@ -153,24 +155,24 @@ class CModel():
 
     def __TakeAction(self, action, state, episode):
         if action == 0:
-            fAlpha = 0
-            fImgGamma = 1
+            # fAlpha = 0
+            self.__fImgGamma = 1
         elif action == 1:
-            fAlpha = 0.01
-            fImgGamma = 1.02
+            # fAlpha = 0.01
+            self.__fImgGamma = self.__fImgGamma
         elif action == 2:
-            fAlpha = -0.01
-            fImgGamma = 1.02
+            # fAlpha = -0.01
+            self.__fImgGamma += 0.01
         elif action == 3:
-            fAlpha = 0.01
-            fImgGamma = 0.98
-        elif action == 4:
-            fAlpha = -0.01
-            fImgGamma = 0.98
-
-        oImage = np.clip(((1 + fAlpha) * state - 128 * fAlpha), 0, 255).astype(np.uint8)
-        # oImage = (((oImage / 255) ** (1 / (fImgGamma + 0.000000001))) * 255).astype(np.uint8)
+            # fAlpha = 0.01
+            self.__fImgGamma -= 0.01    
+        # elif action == 4:
+            # fAlpha = -0.01
+            # self.__fImgGamma -= 0.01
         
+        # oImage = np.clip(((1 + fAlpha) * state - 128 * fAlpha), 0, 255).astype(np.uint8)
+        oImage = (((state / 255.0) ** (1.0 / (self.__fImgGamma))) * 255).astype(np.uint8)
+
         vKpSrc, _ = self.__oKptModel.detectAndCompute(np.squeeze(state, axis=0), None)
         vKpDst, _ = self.__oKptModel.detectAndCompute(np.squeeze(oImage, axis=0), None)
 
@@ -184,7 +186,8 @@ class CModel():
         sDeltaN = len(vKpDst) - len(vKpSrc)
         sReward = self.__fLambda * sDeltaN + bSuccess * self.__sRewardSuccess + bFail * self.__sRewardFail
         if(self.__bVideo):
-            oImgKeypt = cv2.drawKeypoints(np.squeeze(state, axis=0), vKpSrc, None)
+            oImgVideo = np.squeeze(oImage, axis=0)
+            oImgKeypt = cv2.drawKeypoints(oImgVideo, vKpSrc, None)
             cv2.putText(oImgKeypt, "Episode " + str(episode), (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
             cv2.putText(oImgKeypt, "Reward " + str(sReward), (10, 50),  cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
             self.__oVideo.write(oImgKeypt)
