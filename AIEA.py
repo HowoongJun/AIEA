@@ -10,9 +10,10 @@ class eSettingCmd(IntEnum):
 
 class CAiea():
     def __init__(self, episodes, drl_model='dqn', mode='eval'):
-        self.__strCkptPath = "./checkpoints"
+        self.__strCkptPath = "./checkpoints/"
         if(not os.path.exists(self.__strCkptPath)):
             os.mkdir(self.__strCkptPath)
+        self.__strCkptPath += "dqn_checkpoint.pth"
         if(drl_model == 'dqn'):
             self.__oDrlModule = imp.load_source(drl_model, "./model/dqn.py")
             

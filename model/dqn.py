@@ -2,9 +2,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from collections import namedtuple
 import numpy as np
-import cv2, random, torch, math
-from skimage import io
+import cv2, random, torch, math, os
 from common.Log import DebugPrint
+from skimage import io
 
 class RLnet(nn.Module):
     def __init__(self, h, w, outputs):
@@ -68,7 +68,7 @@ class CModel():
         elif(self.__strKptDetection == "orb"):
             self.__oKptModel = cv2.ORB_create()
 
-    def Setting(self, image, video=False, checkpoint_path='./checkpoints'):
+    def Setting(self, image, video=False, checkpoint_path='./checkpoints/dqn_checkpoint.pth'):
         self.__oState = torch.from_numpy(np.uint8(image)).to(self.__strDevice)
         _, uHeight, uWidth = image.shape
         
@@ -90,15 +90,19 @@ class CModel():
     def Test(self):
         bDone = False
         self.__uSteps=0
-
+        self.__LoadCheckpoint()
         vKptOriginal, _ = self.__oKptModel.detectAndCompute(np.squeeze(np.asarray(self.__oState.cpu()), axis=0), None)
-        self.__vKptThreshold = [len(vKptOriginal) * 0.8, len(vKptOriginal) * 1.1]
+        self.__vKptThreshold = [0, len(vKptOriginal) * 3]
         self.__fImgGamma = 1
+        fMaxReward = -10
         while not bDone:
             vAction = self.__SelectAction(self.__oState)
             oNextState, fReward, _, _ = self.__TakeAction(vAction, np.asarray(self.__oState.cpu()), "Test")
             self.__oState = oNextState
-            
+            if(fReward > fMaxReward):
+                fMaxReward = fReward
+                oImg = np.squeeze(self.__oState, axis=0)
+                cv2.imwrite("./result.png", oImg.numpy())
             if self.__uSteps % 100 == 0:
                 DebugPrint().info("Reward: " + str(fReward))
             if(self.__uSteps > 1000):
@@ -110,13 +114,14 @@ class CModel():
         vKptOriginal, _ = self.__oKptModel.detectAndCompute(np.squeeze(np.asarray(oSrcState.cpu()), axis=0), None)
         self.__vKptThreshold = [len(vKptOriginal) * 0.8, len(vKptOriginal) * 2]
         DebugPrint().info("Original Kpt Number: " + str(len(vKptOriginal)) + ", " + str(self.__vKptThreshold))
+        if(os.path.isfile(self.__strCkptPath)):
+            self.__LoadCheckpoint()
+
         for iEpisode in range(self.__uNumEpisodes):
             bDone = False
             self.__uSteps = 0
             self.__oState = oSrcState
             self.__fImgGamma = 1
-            if(iEpisode > 0):
-                self.__oTargetNet.load_state_dict(torch.load(self.__strCkptPath + "/dqn_checkpoint.pth"))
                 
             while not bDone:
                 vAction = self.__SelectAction(self.__oState)
@@ -131,8 +136,24 @@ class CModel():
             if iEpisode % TARGET_UPDATE == 0:
                 DebugPrint().info("Episode: " + str(iEpisode) + ", Reward: " + str(fReward) + ", Kpt Dst: " + str(sKptDst))
                 self.__oTargetNet.load_state_dict(self.__oPolicyNet.state_dict())
-                torch.save(self.__oTargetNet.state_dict(), self.__strCkptPath + "/dqn_checkpoint.pth")
+                self.__SaveCheckpoint()
+            del oReward
+            del self.__oState
             torch.cuda.empty_cache()
+
+    def __LoadCheckpoint(self):
+        checkpoint = torch.load(self.__strCkptPath)
+        self.__oPolicyNet.load_state_dict(checkpoint['Policy'])
+        self.__oTargetNet.load_state_dict(checkpoint['Target'])
+        self.__oOptimizer.load_state_dict(checkpoint['Optimizer'])
+
+    def __SaveCheckpoint(self):
+        checkpoint = {
+            'Policy': self.__oPolicyNet.state_dict(),
+            'Target': self.__oTargetNet.state_dict(),
+            'Optimizer': self.__oOptimizer.state_dict()
+        }
+        torch.save(checkpoint, self.__strCkptPath)
 
     def Reset(self):
         if(self.__bVideo):
