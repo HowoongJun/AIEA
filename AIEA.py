@@ -9,15 +9,14 @@ class eSettingCmd(IntEnum):
     eSettingCmd_SAVE_VIDEO = 4
 
 class CAiea():
-    def __init__(self, episodes, drl_model='dqn', mode='eval'):
+    def __init__(self, episodes, drl_model='dqn', mode='eval', kpt_model='sift'):
         self.__strCkptPath = "./checkpoints/"
         if(not os.path.exists(self.__strCkptPath)):
             os.mkdir(self.__strCkptPath)
-        self.__strCkptPath += "dqn_checkpoint.pth"
+        
         if(drl_model == 'dqn'):
             self.__oDrlModule = imp.load_source(drl_model, "./model/dqn.py")
-            
-        self.__oModel = self.__oDrlModule.CModel(num_episodes=episodes)
+        self.__oModel = self.__oDrlModule.CModel(num_episodes=episodes, keypoint_detection=kpt_model)
         
     def Setting(self, eCommand:int, Value=None):
         eCmd = eSettingCmd(eCommand)
@@ -32,11 +31,11 @@ class CAiea():
                 self.__bSaveVideo = False
 
     def Write(self):
-        self.__oModel.Setting(self.__oImage, video=self.__bSaveVideo, checkpoint_path=self.__strCkptPath)
+        self.__oModel.Setting(image=self.__oImage, video=self.__bSaveVideo, checkpoint_path=self.__strCkptPath)
         self.__oModel.Train()
         self.__oModel.Reset()
 
     def Read(self):
-        self.__oModel.Setting(self.__oImage, video=self.__bSaveVideo, checkpoint_path=self.__strCkptPath)
+        self.__oModel.Setting(image=self.__oImage, video=self.__bSaveVideo, checkpoint_path=self.__strCkptPath)
         self.__oModel.Test()
         self.__oModel.Reset()

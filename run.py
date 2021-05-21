@@ -3,6 +3,7 @@ from skimage import io
 import argparse, os, sys
 from common.Log import DebugPrint
 from glob import glob
+from common.utils import CudaStatus
 
 parser = argparse.ArgumentParser(description='Active Image Enhancing Agent (AIEC) for Keypoint Detection')
 parser.add_argument('--mode', '-o', type=str, default='test', dest='mode',
@@ -15,12 +16,14 @@ parser.add_argument('--video', '-v', type=bool, dest='video',
                     help='Save video (True/False)')
 parser.add_argument('--episode', '-e', type=int, dest='episode',
                     help='Total episode number for training')
+parser.add_argument('--keypoint', '-k', type=str, dest='keypoint',
+                    help='Select keypoint detection algorithm (sift, orb)')
 
 args = parser.parse_args()
 
 def readFolder(strImgFolder):
     if(not os.path.isdir(strImgFolder)):
-        log.DebugPrint().warning("Path does not exist!")
+        DebugPrint().warning("Path does not exist!")
         return False
     strPngList = [os.path.basename(x) for x in glob(strImgFolder + "*.png")]
     strJpgList = [os.path.basename(x) for x in glob(strImgFolder + "*.jpg")]
@@ -30,6 +33,7 @@ def readFolder(strImgFolder):
 
 def trainDRL(model, file_list):
     for fileIdx in file_list:
+        DebugPrint().info("Image: " + str(fileIdx))
         strImgPath = args.db + '/' + fileIdx
         oImage = io.imread(strImgPath, as_gray=True) * 255
         model.Setting(AIEA.eSettingCmd.eSettingCmd_IMAGE_DATA, oImage)
@@ -46,12 +50,12 @@ def testDRL(model, file_list):
         model.Read()
 
 if __name__ == "__main__":
-    oAIEA = AIEA.CAiea(mode=args.mode, episodes=args.episode)
+    oAIEA = AIEA.CAiea(mode=args.mode, episodes=args.episode, kpt_model=args.keypoint)
     if(args.mode == 'train'):
         if(args.db == None):
             DebugPrint().error("No DB path for training")
             sys.exit()
-        strFileList = readFolder(args.db)
+        strFileList = readFolder(args.db + "/")
         trainDRL(oAIEA, strFileList)
 
     elif(args.mode == 'test'):

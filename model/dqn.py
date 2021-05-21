@@ -4,7 +4,9 @@ from collections import namedtuple
 import numpy as np
 import cv2, random, torch, math, os
 from common.Log import DebugPrint
-from skimage import io
+from skimage.transform import resize
+from common.utils import CudaStatus
+import random
 
 class RLnet(nn.Module):
     def __init__(self, h, w, outputs):
@@ -58,62 +60,80 @@ class CModel():
         self.__uBatchSize = 128
         self.__fGamma = 0.999
         self.__fLambda = 0.1
-        self.__sRewardFail = -10
-        self.__sRewardSuccess = 10
+        self.__sRewardFail = -20
+        self.__sRewardSuccess = 20
         self.__uNumEpisodes = num_episodes
-        self.__uActionSpace = 5
+        self.__uActionSpace = 6
         self.__strKptDetection = keypoint_detection
         if(self.__strKptDetection == "sift"):
+            DebugPrint().info("SIFT Create!")
             self.__oKptModel = cv2.SIFT_create()
+            self.__oBfMatcher = cv2.BFMatcher(cv2.NORM_L2, crossCheck=True)
         elif(self.__strKptDetection == "orb"):
+            DebugPrint().info("ORB Create!")
             self.__oKptModel = cv2.ORB_create()
+            self.__oBfMatcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+        elif(self.__strKptDetection == "surf"):
+            DebugPrint().info("SURF Create!")
+            self.__oKptModel = cv2.SURF_create()
+            self.__oBfMatcher = cv2.BFMatcher(cv2.NORM_L2, crossCheck=True)
 
-    def Setting(self, image, video=False, checkpoint_path='./checkpoints/dqn_checkpoint.pth'):
-        self.__oState = torch.from_numpy(np.uint8(image)).to(self.__strDevice)
-        _, uHeight, uWidth = image.shape
-        
-        self.__oPolicyNet = RLnet(uHeight, uWidth, self.__uActionSpace).to(self.__strDevice)
-        self.__oTargetNet = RLnet(uHeight, uWidth, self.__uActionSpace).to(self.__strDevice)
+    def Setting(self, image, img_size = (1,480,640), video=False, checkpoint_path='./checkpoints/'):
+        oImg = resize(image, img_size)
+        self.__oState = torch.from_numpy(np.uint8(oImg)).to(self.__strDevice)
+        _, self.__uHeight, self.__uWidth = oImg.shape
+        self.__fCenter = (self.__uWidth / 2, self.__uHeight / 2)
+        self.__oPolicyNet = RLnet(self.__uHeight, self.__uWidth, self.__uActionSpace).to(self.__strDevice)
+        self.__oTargetNet = RLnet(self.__uHeight, self.__uWidth, self.__uActionSpace).to(self.__strDevice)
         self.__oTargetNet.load_state_dict(self.__oPolicyNet.state_dict())
         self.__oTargetNet.eval()
 
         self.__oOptimizer = torch.optim.RMSprop(self.__oPolicyNet.parameters())
-        self.__oMemory = ReplayMemory(10000)
-        self.__fImgGamma = 1
-        self.__strCkptPath = checkpoint_path
+       
+        self.__strCkptPath = checkpoint_path + "dqn_" + self.__strKptDetection + "_checkpoint.pth"
         self.__bVideo = video
 
         if(video):
             fourcc = cv2.VideoWriter_fourcc(*'MPEG')
-            self.__oVideo = cv2.VideoWriter("./Video.mp4", fourcc, 25.0, (uWidth, uHeight))
+            self.__oVideo = cv2.VideoWriter("./Video_" + str(self.__strKptDetection) + ".mp4", fourcc, 25.0, (self.__uWidth * 2, self.__uHeight))
 
     def Test(self):
         bDone = False
         self.__uSteps=0
         self.__LoadCheckpoint()
-        vKptOriginal, _ = self.__oKptModel.detectAndCompute(np.squeeze(np.asarray(self.__oState.cpu()), axis=0), None)
-        self.__vKptThreshold = [0, len(vKptOriginal) * 3]
-        self.__fImgGamma = 1
+        vKptOriginal, vDescOriginal = self.__oKptModel.detectAndCompute(np.squeeze(np.asarray(self.__oState.cpu()), axis=0), None)
+        self.__vKptThreshold = [0, len(vKptOriginal) * 1.2]
+        self.__uRotAngle = random.randint(0, 360)
+        self.__fRotScale = random.uniform(0.5, 1.5)
+        oImgWarp = self.__RotateImage(np.asarray(self.__oState.cpu()), self.__uRotAngle, self.__fRotScale)
+        vKpWarpInit, vDescWarpInit = self.__oKptModel.detectAndCompute(oImgWarp, None)
+        vMatchesInit = self.__oBfMatcher.match(vDescOriginal, vDescWarpInit)
+        self.__uKptMatch = len(vMatchesInit)
         fMaxReward = -10
+        sMaxKptDist = -100
         while not bDone:
             vAction = self.__SelectAction(self.__oState)
-            oNextState, fReward, _, _ = self.__TakeAction(vAction, np.asarray(self.__oState.cpu()), "Test")
+            oNextState, fReward, bDone, sKptDst = self.__TakeAction(vAction, np.asarray(self.__oState.cpu()), "Test")
             self.__oState = oNextState
             if(fReward > fMaxReward):
                 fMaxReward = fReward
+                sMaxKptDist = sKptDst
                 oImg = np.squeeze(self.__oState, axis=0)
                 cv2.imwrite("./result.png", oImg.numpy())
             if self.__uSteps % 100 == 0:
                 DebugPrint().info("Reward: " + str(fReward))
-            if(self.__uSteps > 1000):
+                cudaStatus = CudaStatus()
+                DebugPrint().info("CUDA Memory: " + str(cudaStatus["allocated"]) + "/" + str(cudaStatus["total"]))
+            if(self.__uSteps > 100):
                 break
+        DebugPrint().info("Reward: " + str(fReward) + ", Init -> Dst: " + str(self.__uKptMatch) + " -> " + str(sMaxKptDist))
+            
 
     def Train(self):
-        TARGET_UPDATE = 10
+        TARGET_UPDATE = 1
         oSrcState = self.__oState
-        vKptOriginal, _ = self.__oKptModel.detectAndCompute(np.squeeze(np.asarray(oSrcState.cpu()), axis=0), None)
-        self.__vKptThreshold = [len(vKptOriginal) * 0.8, len(vKptOriginal) * 2]
-        DebugPrint().info("Original Kpt Number: " + str(len(vKptOriginal)) + ", " + str(self.__vKptThreshold))
+        vKptOriginal, vDescOriginal = self.__oKptModel.detectAndCompute(np.squeeze(np.asarray(oSrcState.cpu()), axis=0), None)
+
         if(os.path.isfile(self.__strCkptPath)):
             self.__LoadCheckpoint()
 
@@ -121,25 +141,41 @@ class CModel():
             bDone = False
             self.__uSteps = 0
             self.__oState = oSrcState
-            self.__fImgGamma = 1
-                
+            self.__oMemory = ReplayMemory(10000)
+            self.__uRotAngle = random.randint(0, 360)
+            self.__fRotScale = random.uniform(0.5, 1.5)
+            oImgWarp = self.__RotateImage(np.asarray(self.__oState.cpu()), self.__uRotAngle, self.__fRotScale)
+            vKpWarpInit, vDescWarpInit = self.__oKptModel.detectAndCompute(oImgWarp, None)
+            vMatchesInit = self.__oBfMatcher.match(vDescOriginal, vDescWarpInit)
+            self.__uKptMatch = len(vMatchesInit)
+            self.__vKptThreshold = [self.__uKptMatch * 0.8, self.__uKptMatch + 20]
+            fSumReward = 0
             while not bDone:
                 vAction = self.__SelectAction(self.__oState)
                 oNextState, fReward, bDone, sKptDst = self.__TakeAction(vAction, np.asarray(self.__oState.cpu()), iEpisode)
-                oReward = torch.tensor([fReward], device=self.__strDevice)
                 self.__oState = torch.unsqueeze(self.__oState, 0).to(self.__strDevice, dtype=torch.float)
                 oNextStateMem = torch.unsqueeze(oNextState, 0).to(self.__strDevice, dtype=torch.float)
+                if(self.__uSteps > 100):
+                    bDone = True
+                    fReward = sKptDst - self.__uKptMatch
+                oReward = torch.tensor([fReward], device=self.__strDevice)
                 self.__oMemory.push(self.__oState, vAction, oNextStateMem, oReward)
                 self.__oState = oNextState
                 self.__OptimizeModel()
-            
+                fSumReward += fReward
+                
             if iEpisode % TARGET_UPDATE == 0:
-                DebugPrint().info("Episode: " + str(iEpisode) + ", Reward: " + str(fReward) + ", Kpt Dst: " + str(sKptDst))
+                DebugPrint().info("Episode: " + str(iEpisode) + ", Step: " + str(self.__uSteps) + ", Reward: " + str(fSumReward) + ", Init -> Kpt Dst: " + str(len(vMatchesInit)) + " -> " + str(sKptDst))
                 self.__oTargetNet.load_state_dict(self.__oPolicyNet.state_dict())
+                cudaStatus = CudaStatus()
+                DebugPrint().info("CUDA Memory:" + str(cudaStatus["allocated"]) + "/" + str(cudaStatus["total"]))
                 self.__SaveCheckpoint()
-            del oReward
-            del self.__oState
-            torch.cuda.empty_cache()
+
+    def __RotateImage(self, image, uAngle, fScale):
+        mRot = cv2.getRotationMatrix2D(self.__fCenter, uAngle, fScale)
+        image = np.squeeze(image, axis=0)
+        oImageWarp = cv2.warpAffine(image, mRot, (self.__uWidth, self.__uHeight))
+        return oImageWarp
 
     def __LoadCheckpoint(self):
         checkpoint = torch.load(self.__strCkptPath)
@@ -158,7 +194,7 @@ class CModel():
     def Reset(self):
         if(self.__bVideo):
             self.__oVideo.release()
-        
+
     def __SelectAction(self, state):
         EPS_END = 0.05
         EPS_START = 0.9
@@ -175,45 +211,55 @@ class CModel():
             return torch.tensor([[random.randrange(self.__uActionSpace)]], device=self.__strDevice, dtype=torch.long)
 
     def __TakeAction(self, action, state, episode):
-        if action == 0:
-            # fAlpha = 0
-            self.__fImgGamma = 1
-        elif action == 1:
-            # fAlpha = 0.01
-            self.__fImgGamma = self.__fImgGamma
-        elif action == 2:
-            # fAlpha = -0.01
-            self.__fImgGamma += 0.01
-        elif action == 3:
-            # fAlpha = 0.01
-            self.__fImgGamma -= 0.01    
-        # elif action == 4:
-            # fAlpha = -0.01
-            # self.__fImgGamma -= 0.01
+        if action.item() == 0:
+            fImgGamma = 1
+            fAlpha = 0
+        elif action.item() == 1:
+            fImgGamma = 1.03
+            fAlpha = 0
+        elif action.item() == 2:
+            fImgGamma = 0.97 
+            fAlpha = 0
+        elif action.item() == 3:
+            fAlpha = 0.01
+            fImgGamma = 1
+        elif action.item() == 4:
+            fAlpha = -0.01
+            fImgGamma = 1
+        elif action.item() == 5:
+            fAlpha = 0
+            fImgGamma = 1
         
-        # oImage = np.clip(((1 + fAlpha) * state - 128 * fAlpha), 0, 255).astype(np.uint8)
-        oImage = (((state / 255.0) ** (1.0 / (self.__fImgGamma))) * 255).astype(np.uint8)
+        oImage = np.clip(((1 + fAlpha) * state - 128 * fAlpha), 0, 255).astype(np.uint8)
+        oImage = (((state / 255.0) ** (1.0 / (fImgGamma))) * 255).astype(np.uint8)
+        
+        oImageWarp = self.__RotateImage(oImage, self.__uRotAngle, self.__fRotScale)
+        vKpDst, vDesDst = self.__oKptModel.detectAndCompute(np.squeeze(oImage, axis=0), None)
+        vKpWarp, vDesWarp = self.__oKptModel.detectAndCompute(oImageWarp, None)
+        vMatches = self.__oBfMatcher.match(vDesDst, vDesWarp)
 
-        vKpSrc, _ = self.__oKptModel.detectAndCompute(np.squeeze(state, axis=0), None)
-        vKpDst, _ = self.__oKptModel.detectAndCompute(np.squeeze(oImage, axis=0), None)
-
+        uMatchNumber = len(vMatches)        
         bFail = False
         bSuccess = False
-
-        if(len(vKpDst) > self.__vKptThreshold[1]):
+        sDeltaN=0
+        if(uMatchNumber > self.__vKptThreshold[1]):
             bSuccess = True
-        elif(len(vKpDst) < self.__vKptThreshold[0]):
+        elif(uMatchNumber < self.__vKptThreshold[0]):
             bFail = True
-        sDeltaN = len(vKpDst) - len(vKpSrc)
+        else:
+            sDeltaN = -0.1
+        # sDeltaN = uMatchNumber - self.__uKptMatch
+
         sReward = self.__fLambda * sDeltaN + bSuccess * self.__sRewardSuccess + bFail * self.__sRewardFail
         if(self.__bVideo):
             oImgVideo = np.squeeze(oImage, axis=0)
-            oImgKeypt = cv2.drawKeypoints(oImgVideo, vKpSrc, None)
-            cv2.putText(oImgKeypt, "Episode " + str(episode), (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            cv2.putText(oImgKeypt, "Reward " + str(sReward), (10, 50),  cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            self.__oVideo.write(oImgKeypt)
+            oImgMatch = cv2.drawMatches(oImgVideo, vKpDst, oImageWarp, vKpWarp, vMatches, None, flags=cv2.DRAW_MATCHES_FLAGS_NOT_DRAW_SINGLE_POINTS)
+            oImgKeypt = cv2.drawKeypoints(oImgVideo, vKpDst, None)
+            cv2.putText(oImgMatch, "Episode " + str(episode), (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            cv2.putText(oImgMatch, "Matched " + str(uMatchNumber) + "(Action: " + str(action.item()) + ")", (10, 50),  cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            self.__oVideo.write(oImgMatch)
 
-        return torch.from_numpy(oImage), sReward, bSuccess + bFail, len(vKpDst)
+        return torch.from_numpy(oImage), sReward, bSuccess + bFail, uMatchNumber
 
     def __OptimizeModel(self):
         if len(self.__oMemory) < self.__uBatchSize:
