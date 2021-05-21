@@ -1,6 +1,7 @@
 from enum import IntEnum
 import imp, os
 import numpy as np
+from common.Log import DebugPrint
 
 class eSettingCmd(IntEnum):
     eSettingCmd_NONE = 1
@@ -9,13 +10,18 @@ class eSettingCmd(IntEnum):
     eSettingCmd_SAVE_VIDEO = 4
 
 class CAiea():
-    def __init__(self, episodes, drl_model='dqn', mode='eval', kpt_model='sift'):
+    def __init__(self, episodes, method='a', mode='test', kpt_model='sift'):
         self.__strCkptPath = "./checkpoints/"
         if(not os.path.exists(self.__strCkptPath)):
             os.mkdir(self.__strCkptPath)
-        
-        if(drl_model == 'dqn'):
-            self.__oDrlModule = imp.load_source(drl_model, "./model/dqn.py")
+
+        if(method == 'a'):
+            DebugPrint().info("Method A")
+            self.__oDrlModule = imp.load_source(method, "./model/methodA.py")
+        elif(method == 'b'):
+            DebugPrint().info("Method B")
+            self.__oDrlModule = imp.load_source(method, "./model/methodB.py")
+            
         self.__oModel = self.__oDrlModule.CModel(num_episodes=episodes, keypoint_detection=kpt_model)
         
     def Setting(self, eCommand:int, Value=None):

@@ -8,6 +8,8 @@ from common.utils import CudaStatus
 parser = argparse.ArgumentParser(description='Active Image Enhancing Agent (AIEC) for Keypoint Detection')
 parser.add_argument('--mode', '-o', type=str, default='test', dest='mode',
                     help='Mode select: test, train')
+parser.add_argument('--method', '-m', type=str, default='b', dest='method',
+                    help='Method select: a, b')
 parser.add_argument('--db', '-d', type=str, dest='db', default=None,
                     help='DB path for TRAINING mode')
 parser.add_argument('--query', '-q', type=str, dest='query', default=None,
@@ -50,7 +52,7 @@ def testDRL(model, file_list):
         model.Read()
 
 if __name__ == "__main__":
-    oAIEA = AIEA.CAiea(mode=args.mode, episodes=args.episode, kpt_model=args.keypoint)
+    oAIEA = AIEA.CAiea(mode=args.mode, method=args.method, episodes=args.episode, kpt_model=args.keypoint)
     if(args.mode == 'train'):
         if(args.db == None):
             DebugPrint().error("No DB path for training")
