@@ -101,16 +101,15 @@ class CModel():
         bDone = False
         self.__uSteps=0
         self.__LoadCheckpoint()
-        vKptOriginal, vDescOriginal = self.__oKptModel.detectAndCompute(np.squeeze(np.asarray(self.__oState.cpu()), axis=0), None)
-        self.__vKptThreshold = [0, len(vKptOriginal) * 1.2]
-        self.__uRotAngle = random.randint(0, 360)
-        self.__fRotScale = random.uniform(0.5, 1.5)
-        oImgWarp = self.__RotateImage(np.asarray(self.__oState.cpu()), self.__uRotAngle, self.__fRotScale)
-        vKpWarpInit, vDescWarpInit = self.__oKptModel.detectAndCompute(oImgWarp, None)
-        vMatchesInit = self.__oBfMatcher.match(vDescOriginal, vDescWarpInit)
-        self.__uKptMatch = len(vMatchesInit)
-        fMaxReward = -10
+        self.__vKptOriginal, self.__vDescOriginal = self.__oKptModel.detectAndCompute(np.squeeze(np.asarray(self.__oState.cpu()), axis=0), None)
+        
+        oDarkImg = np.asarray((self.__oState.cpu() / 255.0) ** (1.0 / 0.4) * 255).astype(np.uint8)
+        self.__vKptDark, _ = self.__oKptModel.detectAndCompute(np.squeeze(oDarkImg, axis=0), None)
+        self.__vKptThreshold = [len(self.__vKptDark), len(self.__vKptOriginal) * 1.2]
+        self.__oState = torch.from_numpy(oDarkImg)
+        fMaxReward = -100
         sMaxKptDist = -100
+        cv2.imwrite("./original.png", np.squeeze(self.__oState, axis=0).numpy())
         while not bDone:
             vAction = self.__SelectAction(self.__oState)
             oNextState, fReward, bDone, sKptDst = self.__TakeAction(vAction, np.asarray(self.__oState.cpu()), "Test")
@@ -121,12 +120,12 @@ class CModel():
                 oImg = np.squeeze(self.__oState, axis=0)
                 cv2.imwrite("./result.png", oImg.numpy())
             if self.__uSteps % 100 == 0:
-                DebugPrint().info("Reward: " + str(fReward))
+                DebugPrint().info("Max Reward: " + str(fMaxReward))
                 cudaStatus = CudaStatus()
                 DebugPrint().info("CUDA Memory: " + str(cudaStatus["allocated"]) + "/" + str(cudaStatus["total"]))
             if(self.__uSteps > 100):
                 break
-        DebugPrint().info("Reward: " + str(fReward) + ", Init -> Dst: " + str(self.__uKptMatch) + " -> " + str(sMaxKptDist))
+        DebugPrint().info("Reward: " + str(fReward) + ", Init -> Dst: " + str(len(self.__vKptDark)) + " -> " + str(sMaxKptDist))
             
 
     def Train(self):
@@ -139,6 +138,7 @@ class CModel():
         self.__vKptDark, _ = self.__oKptModel.detectAndCompute(np.squeeze(oDarkImg, axis=0), None)
         if(os.path.isfile(self.__strCkptPath)):
             self.__LoadCheckpoint()
+        self.__vKptThreshold = [len(self.__vKptDark), len(self.__vKptOriginal) * 1.2]
 
         for iEpisode in range(self.__uNumEpisodes):
             bDone = False
@@ -211,10 +211,10 @@ class CModel():
             fImgGamma = 1
             fAlpha = 0
         elif action.item() == 1:
-            fImgGamma = 1.03
+            fImgGamma = 1.1
             fAlpha = 0
         elif action.item() == 2:
-            fImgGamma = 1 / 1.03
+            fImgGamma = 1 / 1.1
             fAlpha = 0
         elif action.item() == 3:
             fAlpha = 0.01
@@ -236,18 +236,18 @@ class CModel():
         bFail = False
         bSuccess = False
         sDeltaN=0
-        if(len(vKpDst) > len(self.__vKptOriginal)):
+        if(len(vKpDst) > self.__vKptThreshold[1]):
             bSuccess = True
-        elif(len(vKpDst) < len(self.__vKptDark) * 0.9):
+        elif(len(vKpDst) < self.__vKptThreshold[0]*0.5):
             bFail = True
         else:
             sDeltaN = -0.1
-        # sDeltaN = uMatchNumber - self.__uKptMatch
+        sDeltaN = len(vKpDst) - len(self.__vKptDark)
 
         sReward = self.__fLambda * sDeltaN + bSuccess * self.__sRewardSuccess + bFail * self.__sRewardFail
         if(self.__bVideo):
             oImgVideo = np.squeeze(oImage, axis=0)
-            oImgKeypt = cv2.drawKeypoints(oImgVideo, vKpDst, None)
+            oImgKeypt = cv2.drawKeypoints(oImgVideo, vKpDst, None, color=(0, 255, 0, 0))
             cv2.putText(oImgKeypt, "Episode " + str(episode), (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
             cv2.putText(oImgKeypt, "(Action: " + str(action.item()) + ")", (10, 50),  cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
             self.__oVideo.write(oImgKeypt)
